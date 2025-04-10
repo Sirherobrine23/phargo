@@ -5,16 +5,16 @@ Reader Php Phar files in golang
 ## Info
 
 Parser supports several signature algorithms:
-* MD5
-* SHA1
-* SHA256
-* SHA512
-* ~~OPENSSL~~
+* md5
+* sha1
+* sha256
+* sha512
+* OpenSSL
 
 Also supports compression formats:
 * None
-* GZ
-* BZ2
+* Gzip
+* Bzip2
 
 Can read manifest version, alias and metadata. For every file inside PHAR-archive can read it contents, 
 name, timestamp and metadata. Checks file CRC and signature of entire archive.
@@ -29,7 +29,48 @@ go get -u github.com/Sirherobrine23/phargo
 
 2. Import and use it:
 
-In update 🚧
+```go
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+
+	"github.com/Sirherobrine23/phargo"
+)
+
+var pharFilePath = flag.String("file", "", "File path")
+
+func main() {
+	flag.Parse()
+
+	// Open file
+	file, err := os.Open(*pharFilePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot open file: %s\n", err)
+		os.Exit(1)
+		return
+	}
+
+	// Get file size
+	stat, _ := file.Stat()
+	
+	// Parse phar file
+	pharInfo, err := phargo.NewReader(file, stat.Size())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot parse file: %s\n", err)
+		os.Exit(1)
+		return
+	}
+
+	// Encode in json output
+	js := json.NewEncoder(os.Stdout)
+	js.SetIndent("", "  ")
+	js.Encode(pharInfo)
+}
+```
 
 ## Running the tests
 
