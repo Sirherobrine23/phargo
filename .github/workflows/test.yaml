@@ -1,0 +1,25 @@
+name: Go test
+on:
+  push:
+    paths:
+      - "**.go"
+      - "go.mod"
+
+jobs:
+  # Go test
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+      name: Checkout code
+
+    - uses: actions/setup-go@v4
+      with:
+        go-version-file: "go.mod"
+        cache: true
+
+    - name: Build
+      run: go build -v ./...
+
+    - name: Test
+      run: go test -timeout 0 -v ./...

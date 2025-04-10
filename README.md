@@ -1,6 +1,6 @@
-# PHARGO
+# Phargo
 
-PHAR-files reader and parser written in golang
+Reader Php Phar files in golang
 
 ## Info
 
@@ -14,7 +14,7 @@ Parser supports several signature algorithms:
 Also supports compression formats:
 * None
 * GZ
-* ~~BZ2~~
+* BZ2
 
 Can read manifest version, alias and metadata. For every file inside PHAR-archive can read it contents, 
 name, timestamp and metadata. Checks file CRC and signature of entire archive.
@@ -24,64 +24,19 @@ name, timestamp and metadata. Checks file CRC and signature of entire archive.
 1. Download and install:
 
 ```sh
-$ go get -u github.com/deadkrolik/phargo
+go get -u github.com/Sirherobrine23/phargo
 ```
 
 2. Import and use it:
 
-```go
-package main
-
-import (
-    "log"
-    "time"
-
-    "github.com/deadkrolik/phargo"
-)
-
-func main() {
-    r := phargo.NewReader()
-    
-    //some limitations
-    if false {
-        r.SetOptions(phargo.Options{
-            //metadata of every file and entire archive can be more than that number
-            MaxMetaDataLength: 10000,
-            //max length of first block of archive when looking for "HALT_COMPILER" string 
-            MaxManifestLength: 1048576 * 100,
-            //max length of name of the file
-            MaxFileNameLength: 1000,
-            //max length of archive alias in manifest
-            MaxAliasLength: 1000,
-        })
-    }
-    
-    file, err := r.Parse("file.phar")
-    if err != nil {
-        log.Println(err)
-        return
-    }
-    
-    log.Println("Manifest version: ", file.Version)
-    log.Println("File alias: ", file.Alias)
-    log.Println("Serialized metadata: ", string(file.Metadata))
-    
-    for _, f := range file.Files {
-        log.Println("File name: ", f.Name)
-        log.Println("File metadata: ", string(f.Metadata))
-        log.Println("File data len: ", len(f.Data))
-        log.Println("File date: ", time.Unix(f.Timestamp, 0).String())
-        log.Println("---")
-    }
-}
-```
+In update 🚧
 
 ## Running the tests
 
 Just run the command:
 
 ```sh
-$ go test
+go test
 ```
 
 ## License
