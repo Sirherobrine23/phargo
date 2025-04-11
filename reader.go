@@ -1,75 +1,66 @@
 package phargo
 
 import (
+	"fmt"
+	"hash/crc32"
+	"io"
 	"os"
 )
 
-//Reader - PHAR file parser
-type Reader struct {
-	options Options
+// Parse phar file from [*os.File]
+func NewReaderFromFile(file *os.File) (*Phar, error) {
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("cannot get file stats: %s", err)
+	}
+	return NewReader(file, stat.Size())
 }
 
-//NewReader - creates parser with default options
-func NewReader() *Reader {
-	return &Reader{
-		options: Options{
-			MaxMetaDataLength: 10000,
-			MaxManifestLength: 1048576 * 100,
-			MaxFileNameLength: 1000,
-			MaxAliasLength:    1000,
-		},
-	}
-}
-
-//SetOptions - applies options to parser
-func (r *Reader) SetOptions(o Options) {
-	r.options = o
-}
-
-//Parse - start parsing PHAR file
-func (r *Reader) Parse(filename string) (File, error) {
-	f, err := os.Open(filename)
+// Parse phar file
+func NewReader(r io.ReaderAt, size int64) (*Phar, error) {
+	manifest, offset, err := ParseManifest(r)
 	if err != nil {
-		return File{}, err
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	var result File
-
-	manifest := &manifest{options: r.options}
-	offset, err := manifest.getOffset(f, 200, "__HALT_COMPILER(); ?>")
-	if err != nil {
-		return File{}, err
+		return nil, fmt.Errorf("cannot parse manifest: %s", err)
 	}
 
-	_, err = f.Seek(offset, 0)
-	if err != nil {
-		return File{}, err
+	// Start struct
+	filePhar := &Phar{Menifest: manifest, Files: []*File{}}
+	if manifest.IsSigned {
+		if filePhar.Signature, err = GetSignature(r, size); err != nil {
+			if err != ErrOpenssl {
+				return nil, err
+			}
+		}
 	}
 
-	err = manifest.parse(f)
-	if err != nil {
-		return File{}, err
-	}
-	result.Alias = string(manifest.Alias)
-	result.Metadata = manifest.MetaSerialized
-	result.Version = manifest.Version
-
-	//files descriptions
-	files := &files{options: r.options}
-	result.Files, err = files.parse(f, manifest.EntitiesCount)
-	if err != nil {
-		return File{}, err
+	for range manifest.EntitiesCount {
+		manifest, newOffset, err := ParseEntryManifest(r, offset)
+		if err != nil {
+			return nil, fmt.Errorf("cannot get file entry: %s", err)
+		}
+		offset = newOffset
+		filePhar.Files = append(filePhar.Files, manifest)
 	}
 
-	//check signature
-	signature := &signature{options: r.options}
-	err = signature.check(filename)
-	if err != nil {
-		return File{}, err
+	for _, file := range filePhar.Files {
+		file.dataOffset = offset
+		offset += file.dataLen
+		if file.FileInfo().IsDir() {
+			continue
+		}
+
+		f, err := file.Open()
+		if err != nil {
+			return nil, fmt.Errorf("cannot check CRC to %s: %s", file.Filename, err)
+		}
+		hash := crc32.New(crc32.MakeTable(0xedb88320))
+		if _, err = io.Copy(hash, f); err != nil {
+			return nil, fmt.Errorf("fail copy %s content to crc32 hash: %s", file.Filename, err)
+		}
+		if hash.Sum32() != file.CRC {
+			return nil, fmt.Errorf("%s has bad CRC, expect: %d, recived: %d", file.Filename, file.CRC, hash.Sum32())
+		}
 	}
 
-	return result, nil
+	return filePhar, nil
 }
