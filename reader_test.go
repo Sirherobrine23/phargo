@@ -2,6 +2,8 @@ package phargo
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -31,11 +33,10 @@ func TestSimple(t *testing.T) {
 	f, _ := file.Files[0].Open()
 	buff := make([]byte, 4)
 	f.Read(buff)
- 	if string(buff) != "ASDF" {
-  	t.Error("Wrong 0 file content")
+	if string(buff) != "ASDF" {
+		t.Error("Wrong 0 file content")
 		return
-  }
-
+	}
 
 	if file.Files[1].Filename != "index.php" {
 		t.Error("Wrong 2 file name")
@@ -65,5 +66,22 @@ func TestBadHash(t *testing.T) {
 	if _, err = NewReaderFromFile(osFile); err == nil {
 		t.Error("Should get error")
 		return
+	}
+}
+
+func TestAllPhars(t *testing.T) {
+	files, _ := os.ReadDir("./testdata")
+	for _, fileName := range files {
+		if filepath.Ext(fileName.Name()) != ".phar" || strings.Contains(fileName.Name(), "bad") {
+			continue
+		}
+		osFile, err := os.Open(filepath.Join("./testdata", fileName.Name()))
+		if err != nil {
+			t.Skip(err)
+			return
+		} else if _, err = NewReaderFromFile(osFile); err != nil {
+			t.Errorf("Got error on %s: %s", fileName.Name(), err)
+			return
+		}
 	}
 }

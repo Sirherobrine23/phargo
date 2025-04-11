@@ -8,20 +8,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path"
 	"strings"
 	"time"
 )
 
 const (
-	ManifestBitmapPermsion = 0x000001FF
-	ManifestBitmapDeflate  = 0x00001000
-	ManifestBitmapBzip2    = 0x00002000
+	ManifestBitmapDeflate = 0x00001000
+	ManifestBitmapBzip2   = 0x00002000
 
-	CompressionMask    = 0xF000
-	entCOMPRESSED_NONE = 0x00000000
-	entCOMPRESSED_GZ   = 0x00001000
-	entCOMPRESSED_BZ2  = 0x00002000
+	EntryPermMask      = 0x000001FF
+	EntryPermMask_usr  = 0x000001C0
+	EntryPermShift_usr = 6
+	EntryPermMask_grp  = 0x00000038
+	EntryPermShift_grp = 3
+	EntryPermMask_oth  = 0x00000007
+	EntryPermDef_file  = 0x000001B6
+	EntryPermDef_dir   = 0x000001FF
+
+	CompressionMask      = 0xF000
+	EntryCompressedNone  = 0x00000000
+	EntryCompressedGzip  = 0x00001000
+	EntryCompressedBzip2 = 0x00002000
 )
 
 type File struct {
@@ -38,13 +47,44 @@ type File struct {
 	dataOffset, dataLen int64
 }
 
+type fileInfo struct {
+	V *File
+}
+
+func (fs fileInfo) Name() string       { return path.Base(fs.V.Filename) }
+func (fs fileInfo) Size() int64        { return fs.V.SizeUncompressed }
+func (fs fileInfo) ModTime() time.Time { return fs.V.Timestamp }
+func (fs fileInfo) IsDir() bool        { return fs.Mode().IsDir() }
+func (fs fileInfo) Sys() any           { return fs.V }
+func (fss fileInfo) Mode() fs.FileMode {
+	PermMask := fss.V.Flags & EntryPermMask
+	UserPerm := PermMask & EntryPermMask_usr >> EntryPermShift_usr
+	GroupPerm := PermMask & EntryPermMask_grp >> EntryPermShift_grp
+	OtherPerm := PermMask & EntryPermMask_oth
+	Perm := fs.FileMode(UserPerm | GroupPerm | OtherPerm)
+
+	// Check if file or dir
+	switch {
+	case fss.V.SizeUncompressed == 0 && fss.V.SizeCompressed == 0:
+		Perm |= fs.ModeDir
+	default:
+		Perm |= fs.ModeType
+	}
+	return Perm
+}
+
+// FileInfo returns an fs.FileInfo for the [File].
+func (file *File) FileInfo() fs.FileInfo {
+	return &fileInfo{file}
+}
+
 // Return file reader with descompression if compressed
 func (file File) Open() (io.ReadCloser, error) {
 	r := io.LimitReader(newReaderFromReaderAtOffset(file.metadataOpen, file.dataOffset), file.dataLen)
 	switch {
-	case file.Flags&entCOMPRESSED_GZ > 0:
+	case file.Flags&EntryCompressedGzip > 0:
 		return gzip.NewReader(r)
-	case file.Flags&entCOMPRESSED_BZ2 > 0:
+	case file.Flags&EntryCompressedBzip2 > 0:
 		return io.NopCloser(bzip2.NewReader(r)), nil
 	default:
 		return io.NopCloser(r), nil
@@ -152,7 +192,7 @@ func ParseManifest(r io.ReaderAt) (*Manifest, int64, error) {
 		return nil, offset + int64(n), err
 	}
 	offset += 4
-	
+
 	MetaLength := binary.LittleEndian.Uint32(metaLen)
 	if MetaLength > 0 {
 		newManifest.Metadata = make([]byte, MetaLength)
@@ -168,7 +208,7 @@ func getOffset(f io.ReaderAt, bufSize int64, haltCompiler string) (int64, error)
 	currentPossion, buffer, before := int64(0), make([]byte, bufSize), make([]byte, bufSize)
 	for {
 		n, err := f.ReadAt(buffer, currentPossion)
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return 0, errors.New("can't find haltCompiler: " + err.Error())
 		}
 
@@ -196,5 +236,8 @@ func getOffset(f io.ReaderAt, bufSize int64, haltCompiler string) (int64, error)
 
 		currentPossion += int64(n)
 		copy(before, buffer)
+		if err == io.EOF {
+			return currentPossion + int64(index) - bufSize + int64(len(haltCompiler)), nil
+		}
 	}
 }

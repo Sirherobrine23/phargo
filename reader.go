@@ -27,7 +27,9 @@ func NewReader(r io.ReaderAt, size int64) (*Phar, error) {
 	filePhar := &Phar{Menifest: manifest, Files: []*File{}}
 	if manifest.IsSigned {
 		if filePhar.Signature, err = GetSignature(r, size); err != nil {
-			return nil, err
+			if err != ErrOpenssl {
+				return nil, err
+			}
 		}
 	}
 
@@ -43,10 +45,13 @@ func NewReader(r io.ReaderAt, size int64) (*Phar, error) {
 	for _, file := range filePhar.Files {
 		file.dataOffset = offset
 		offset += file.dataLen
+		if file.FileInfo().IsDir() {
+			continue
+		}
 
 		f, err := file.Open()
 		if err != nil {
-			return nil, fmt.Errorf("cannot checj CRC to %s: %s", file.Filename, err)
+			return nil, fmt.Errorf("cannot check CRC to %s: %s", file.Filename, err)
 		}
 		hash := crc32.New(crc32.MakeTable(0xedb88320))
 		if _, err = io.Copy(hash, f); err != nil {

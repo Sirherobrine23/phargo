@@ -14,28 +14,32 @@ import (
 )
 
 const (
-	SignatureMD5           SignatureFlag = 0x0001
-	SignatureSHA1                        = 0x0002
-	SignatureSHA256                      = 0x0003
-	SignatureSHA512                      = 0x0004
-	SignatureOPENSSL                     = 0x0010
-	SignatureOPENSSLSHA256               = 0x0011
-	SignatureOPENSSLSHA512               = 0x0012
+	SignatureMD5           = SignatureFlag(0x0001)
+	SignatureSHA1          = SignatureFlag(0x0002)
+	SignatureSHA256        = SignatureFlag(0x0003)
+	SignatureSHA512        = SignatureFlag(0x0004)
+	SignatureOpenSSL       = SignatureFlag(0x0010)
+	SignatureOpenSSLSha256 = SignatureFlag(0x0011)
+	SignatureOpenSSLSha512 = SignatureFlag(0x0012)
 )
 
 var (
+	pharSignatureStubLen = 8
+	pharSignatureLenLen  = 4
+	pharMaxSignatureLen  = 8 * 1024
+
 	ErrOpenssl          = errors.New("openssl is disabled in this implementation")
 	ErrInvalidSignature = errors.New("invalid signature")
 	ErrGBMB             = errors.New("can't find GBMB constant at the end")
 
 	sigName = map[SignatureFlag]string{
-		SignatureMD5:           "MD5",
-		SignatureSHA1:          "SHA1",
-		SignatureSHA256:        "SHA256",
-		SignatureSHA512:        "SHA512",
-		SignatureOPENSSL:       "OPENSSL",
-		SignatureOPENSSLSHA256: "OPENSSL_SHA256",
-		SignatureOPENSSLSHA512: "OPENSSL_SHA512",
+		SignatureMD5:           "md5",
+		SignatureSHA1:          "sha1",
+		SignatureSHA256:        "sha256",
+		SignatureSHA512:        "sha512",
+		SignatureOpenSSL:       "OpenSSL",
+		SignatureOpenSSLSha256: "OpenSSL_sha256",
+		SignatureOpenSSLSha512: "OpenSSL_sha512",
 	}
 )
 
@@ -48,10 +52,16 @@ func (sig SignatureFlag) String() string {
 	return "unknown"
 }
 
+func (sig SignatureFlag) MarshalText() (text []byte, err error) {
+	if str, ok := sigName[sig]; ok {
+		return []byte(str), nil
+	}
+	return []byte("unknown"), nil
+}
+
 type Signature struct {
-	Hash      []byte
 	Signature SignatureFlag
-	GBMB      uint32
+	Hash      []byte
 }
 
 // Get phar signature
@@ -67,13 +77,10 @@ func GetSignature(r io.ReaderAt, size int64) (*Signature, error) {
 	}
 
 	// Make new signature
-	newSignature := &Signature{
-		Signature: SignatureFlag(binary.LittleEndian.Uint32(bin[0:4])),
-		GBMB:      binary.LittleEndian.Uint32(bin[4:]),
-	}
+	newSignature := &Signature{Signature: SignatureFlag(binary.LittleEndian.Uint32(bin[0:4]))}
 
-	//GBMB string
-	if newSignature.GBMB != 1112359495 {
+	// GBMB string
+	if binary.LittleEndian.Uint32(bin[4:]) != 1112359495 {
 		return nil, ErrGBMB
 	}
 
@@ -103,76 +110,37 @@ func GetSignature(r io.ReaderAt, size int64) (*Signature, error) {
 		if _, err := r.ReadAt(newSignature.Hash, size-72); err != nil {
 			return nil, fmt.Errorf("cannot get sha512 hash: %s", err)
 		}
-	case SignatureOPENSSL, SignatureOPENSSLSHA256, SignatureOPENSSLSHA512:
-		switch newSignature.Signature {
-		case SignatureOPENSSL:
-			if hashCalculator, err = openssl_sha1(); err != nil {
-				return nil, err
-			}
-		case SignatureOPENSSLSHA256:
-			if hashCalculator, err = openssl_sha256(); err != nil {
-				return nil, err
-			}
-		case SignatureOPENSSLSHA512:
-			if hashCalculator, err = openssl_sha512(); err != nil {
-				return nil, err
-			}
+	case SignatureOpenSSL, SignatureOpenSSLSha256, SignatureOpenSSLSha512:
+		lenOffset := size - int64(pharSignatureStubLen) - int64(pharSignatureLenLen)
+		if lenOffset < 0 {
+			return nil, fmt.Errorf("negative offset")
 		}
-		// Not implemented
-		return nil, ErrOpenssl
+		lenBuf := make([]byte, pharSignatureLenLen)
+		n, readErr := r.ReadAt(lenBuf, lenOffset)
+		if readErr != nil {
+			return nil, fmt.Errorf("reading signature length at offset %d: %v", lenOffset, readErr)
+		} else if n != pharSignatureLenLen {
+			return nil, fmt.Errorf("reading signature length at offset %d: expected %d bytes, got %d", lenOffset, pharSignatureLenLen, n)
+		}
 
-		// {
-		//   char sig_buf[8], *sig_ptr = sig_buf;
-		//   zend_off_t read_len;
-		// 			size_t end_of_phar;
-		// 			if (-1 == php_stream_seek(fp, -8, SEEK_END) || (read_len = php_stream_tell(fp)) < 20 || 8 != php_stream_read(fp, sig_buf, 8) || memcmp(sig_buf+4, "GBMB", 4)) {
-		// 				efree(savebuf);
-		// 				php_stream_close(fp);
-		// 				if (error) {
-		// 					spprintf(error, 0, "phar \"%s\" has a broken signature", fname);
-		// 				}
-		// 				return FAILURE;
-		// 			}
-		// 			PHAR_GET_32(sig_ptr, sig_flags);
-		// 			uint32_t signature_len;
-		// 			char *sig;
-		// 			zend_off_t whence;
-		// 			/* we store the signature followed by the signature length */
-		// 			if (-1 == php_stream_seek(fp, -12, SEEK_CUR) || 4 != php_stream_read(fp, sig_buf, 4)) {
-		// 				efree(savebuf);
-		// 				php_stream_close(fp);
-		// 				if (error) {
-		// 					spprintf(error, 0, "phar \"%s\" openssl signature length could not be read", fname);
-		// 				}
-		// 				return FAILURE;
-		// 			}
-		// 			sig_ptr = sig_buf;
-		// 			PHAR_GET_32(sig_ptr, signature_len);
-		// 			sig = (char *) emalloc(signature_len);
-		// 			whence = signature_len + 4;
-		// 			whence = -whence;
-		// 			if (-1 == php_stream_seek(fp, whence, SEEK_CUR) || !(end_of_phar = php_stream_tell(fp)) || signature_len != php_stream_read(fp, sig, signature_len)) {
-		// 				efree(savebuf);
-		// 				efree(sig);
-		// 				php_stream_close(fp);
-		// 				if (error) {
-		// 					spprintf(error, 0, "phar \"%s\" openssl signature could not be read", fname);
-		// 				}
-		// 				return FAILURE;
-		// 			}
-		// 			if (FAILURE == phar_verify_signature(fp, end_of_phar, sig_flags, sig, signature_len, fname, &signature, &sig_len, error)) {
-		// 				efree(savebuf);
-		// 				efree(sig);
-		// 				php_stream_close(fp);
-		// 				if (error) {
-		// 					char *save = *error;
-		// 					spprintf(error, 0, "phar \"%s\" openssl signature could not be verified: %s", fname, *error);
-		// 					efree(save);
-		// 				}
-		// 				return FAILURE;
-		// 			}
-		// 			efree(sig);
-		// }
+		sigLen32 := binary.LittleEndian.Uint32(lenBuf)
+		if sigLen32 == 0 || sigLen32 > uint32(pharMaxSignatureLen) {
+			return nil, fmt.Errorf("invalid signature length %d (must be > 0 and <= %d)", sigLen32, pharMaxSignatureLen)
+		}
+		sigLen := int64(sigLen32)
+		sigOffset := size - int64(pharSignatureStubLen) - int64(pharSignatureLenLen) - sigLen
+		if sigOffset < 0 {
+			return nil, fmt.Errorf("calculated negative signature offset %d (size: %d, sigLen: %d)", sigOffset, size, sigLen)
+		}
+
+		newSignature.Hash = make([]byte, sigLen)
+		n, readErr = r.ReadAt(newSignature.Hash, sigOffset)
+		if readErr != nil && readErr != io.EOF {
+			return nil, fmt.Errorf("reading signature data at offset %d (length %d): %v", sigOffset, sigLen, readErr)
+		} else if int64(n) != sigLen {
+			return nil, fmt.Errorf("reading signature data at offset %d: expected %d bytes, got %d", sigOffset, sigLen, n)
+		}
+		return newSignature, ErrOpenssl
 	default:
 		return nil, ErrInvalidSignature
 	}
